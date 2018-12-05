@@ -52,16 +52,42 @@ typedef enum _OPTYPE
     OP_OR,
     OP_XOR,
     OP_NOT,
-    OP_VAL,
+    OP_VAR_NUM,
+    OP_VAR_STR,
     OP_SZ
 }optype;
+
+typedef enum _VTYPE
+{
+    V_NULL = 0,
+    V_STR,
+    V_INT
+}vartype;
+
+// 변수 구조체
+typedef struct _VAR
+{
+    vartype type;
+    union val
+    {
+        string* str;
+        int* num;
+    };
+}var;
 
 // 명령어 구조체
 typedef struct _OP
 {
     optype code;
-    int val;
+    var val;
 }opcode;
+
+// 스트링 구조체
+typedef struct _STR
+{
+    int len;
+    char* v;
+}string;
 
 // 명령어 -> 읽을수 있는 스트링 테이블
 char opcodeLUT[OP_SZ][MAX_CODE_LEN] =
@@ -86,7 +112,7 @@ opcode opstack[MAX_STACK+1];
 int ophead = 0;
 
 // Stack #2 - 스택 컴퓨터 메모리
-int pmem[MAX_STACK+1];
+var pmem[MAX_STACK+1];
 int pmemhead = 0;
 
 int progstatus = 0;
@@ -97,7 +123,9 @@ optype findOp (const char* op)
     // 스트링 맨 앞이 숫자면 100% 숫자 변수입니다
     int tmp = (op[0] - '0');
     if (tmp >= 0 && tmp <= 9)
-        return OP_VAL;
+        return OP_VAR_NUM;
+    else if (op[0] == '"') // string 변수
+        return OP_VAR_STR;
 
     // 아님 말고
     for (int i=0; i<OP_SZ; i++)
@@ -129,7 +157,7 @@ void clearOp (opcode* src)
 }
 
 // 명령어 넣기
-void pushOp (optype type, int val, opcode* stk, int* head)
+void pushOp (optype type, var val, opcode* stk, int* head)
 {
     stk[ (*head) ].code = type;
     stk[ (*head) ].val = val;
@@ -140,16 +168,19 @@ void pushOp (optype type, int val, opcode* stk, int* head)
 // 명령어 넣기 (스트링)
 void addOp (const char* op)
 {
-    int val = -1;
+    // int val = -1;
     optype code = findOp(op);
+    var val  = (var){V_INT, val.num = -1};
 
     if (code == OP_NADA)
         printf("Enter valid code please!");
-    else if (code == OP_VAL)
+    else if (code == OP_VAR_NUM)
     {
-        sscanf(op, "%i", &val);
+        sscanf(op, "%i", val.num);
         // printf("VAL : %d\n", val);
     }
+    else if (code == OP_VAR_STR)
+        
 
     // add
     pushOp(code, val, opstack, &ophead);
@@ -165,13 +196,17 @@ void printOpcodes ()
     {
         tmpcode = opstack[i].code;
 
-        if (tmpcode != OP_VAL)
+        if (tmpcode == OP_VAR_NUM)
         {
-            printf("%02d| %s\n", i, opcodeLUT[ tmpcode ]);
+            printf("%02d| %d\n", i, opstack[i].val);
+        }
+        else if (tmpcode == OP_VAR_STR)
+        {
+            printf("%02d| %s\n", i, opstack[i].val);
         }
         else
         {
-            printf("%02d| %d\n", i, opstack[i].val);
+            printf("%02d| %s\n", i, opcodeLUT[ tmpcode ]);
         }
     }
 }
@@ -188,13 +223,13 @@ void clearMem (int* src)
 }
 
 // 최상위 값 확인
-int peekMem (int* src, int head)
+var peekMem (var* src, int head)
 {
     return src[head];
 }
 
 // 메모리에 값 넣기
-void pushMem (int val, int* src, int* head)
+void pushMem (var val, var* src, int* head)
 {
     if (*head > MAX_STACK)
     {
@@ -206,7 +241,7 @@ void pushMem (int val, int* src, int* head)
 }
 
 // 메모리에 값 빼기
-int popMem (int* src, int* head)
+var popMem (var* src, int* head)
 {
     if (*head <= 0)
     {
@@ -220,9 +255,15 @@ int popMem (int* src, int* head)
 // 메모리 스택 출력
 void printMem ()
 {
+    var tmp;
     for (int i=0; i<pmemhead; i++)
     {
-        printf("%02X %d\n", i, pmem[ i ]);
+        tmp = pmem[i];
+
+        if (tmp.type == V_INT)
+            printf("%02X %d\n", i, *(pmem[ i ].num));
+        else if (tmp.type == V_STR)
+            printf("%02X %s\n", i, *(pmem[ i ].str));
     }
     printf("HEAD : %d\n", pmemhead);
 }
@@ -232,7 +273,8 @@ void runMachine ()
 {
     clearMem(pmem);
 
-    int x, y; // 명령어의 x y 변수
+    var vx, vy; // 명령어의 x y 변수
+    int x, y;
     progstatus = 0; // 프로그램의 상태 초기화
     opcode* current = NULL; // 현재 opcode를 담을 포인터 변수
     for (int pc=0; pc<ophead; pc++)
@@ -242,86 +284,132 @@ void runMachine ()
         // 명령어 기능들 실행
         switch (current->code)
         {
-            case OP_VAL: // 숫자 / 변수
+            case OP_VAR_NUM: // 숫자 / 변수
+            case OP_VAR_STR:
                 pushMem(current->val, pmem, &pmemhead);
                 break;
 
             // 사칙연산
             case OP_ADD:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x + y, pmem, &pmemhead);
+                if (vx.type != V_INT || vy.type != V_INT)
+                {
+                    printf("ERR] TYPE MISMATCH AT PC=%d!\n", pc);
+                    progstatus = 1;
+                    break;
+                }
+
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x + y}, pmem, &pmemhead);
                 break;
             
             case OP_SUB:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x - y, pmem, &pmemhead);
+                if (vx.type != V_INT || vy.type != V_INT)
+                {
+                    printf("ERR] TYPE MISMATCH AT PC=%d!\n", pc);
+                    progstatus = 1;
+                    break;
+                }
+
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x - y}, pmem, &pmemhead);
                 break;
 
             case OP_MUL:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x * y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x * y}, pmem, &pmemhead);
                 break;
 
             case OP_DIV:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x / y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x / y}, pmem, &pmemhead);
                 break;
 
             case OP_MOD:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x % y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x % y}, pmem, &pmemhead);
                 break;
 
             // 비트 연산자
             case OP_LSH:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x << y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x << y}, pmem, &pmemhead);
                 break;
 
             case OP_RSH:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x >> y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x >> y}, pmem, &pmemhead);
                 break;
 
             case OP_AND:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x & y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x & y}, pmem, &pmemhead);
                 break;
 
             case OP_OR:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x | y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x | y}, pmem, &pmemhead);
                 break;
 
             case OP_XOR:
-                y = popMem(pmem, &pmemhead);
-                x = popMem(pmem, &pmemhead);
+                vy = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
 
-                pushMem(x ^ y, pmem, &pmemhead);
+                x = *(vx.num);
+                y = *(vy.num);
+
+                pushMem((var){V_INT, x ^ y}, pmem, &pmemhead);
                 break;
 
             case OP_NOT:
-                x = popMem(pmem, &pmemhead);
+                vx = popMem(pmem, &pmemhead);
+                x = *(vx.num);
 
-                pushMem(~(x), pmem, &pmemhead);
+                pushMem((var){V_INT, ~x}, pmem, &pmemhead);
                 break;
         }
 
